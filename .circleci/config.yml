@@ -1,0 +1,102 @@
+version: 2.1
+orbs:
+  slack: circleci/slack@3.4.1
+executors:
+  default:
+    docker:
+      - image: circleci/php:7.3-node
+  testing:
+    docker:
+      - image: circleci/php:7.3-node
+      - image: circleci/mysql:5.7-ram
+        environment:
+          MYSQL_DATABASE: laravel
+          MYSQL_ALLOW_EMPTY_PASSWORD: true
+commands:
+  composer:
+    description: Install Composer Packages
+    steps:
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "composer.lock" }}
+            - v1-dependencies-
+      - run:
+          name: Install Composer Packages
+          command: composer install
+      - save_cache:
+          key: v1-dependencies-{{ checksum "composer.lock" }}
+          paths:
+            - ./vendor
+jobs:
+  Unit Tests:
+    executor: testing
+    steps:
+      - checkout
+      - composer
+      - run:
+          name: Copy .env file
+          command: cp .env.testing .env
+      - run:
+          name: Install PHP extensions
+          command: sudo -E docker-php-ext-install -j$(nproc) pdo_mysql
+      - run:
+          name: Database Migrations
+          command: php artisan migrate --force
+      - run:
+          name: PHPUnit Tests
+          command: |
+            mkdir -p ~/test-results/phpunit
+            ./vendor/bin/phpunit --log-junit ~/test-results/phpunit/results.xml
+      - store_test_results:
+          path: ~/test-results
+  Security Tests:
+    executor: default
+    steps:
+      - checkout
+      - git clone https://github.com/sensiolabs/security-checker.git
+      - cd security-checker
+      - composer install
+      - php security-checker security:check ../composer.lock
+  Deploy to Staging:
+    executor: default
+    steps:
+      - checkout
+      - composer
+      - run:
+          name: Deploy to Staging
+          command: ./vendor/bin/vapor deploy staging --commit="${CIRCLE_SHA1}" --message="$(git log --format=%B -n 1 ${CIRCLE_SHA1})"
+  Deploy to Production:
+    executor: default
+    steps:
+      - checkout
+      - composer
+      - run:
+          name: Deploy to Production
+          command: ./vendor/bin/vapor deploy production --commit="${CIRCLE_SHA1}" --message="$(git log --format=%B -n 1 ${CIRCLE_SHA1})"
+workflows:
+  deploy to staging:
+    jobs:
+      - Unit Tests:
+          filters:
+            branches:
+              ignore: master
+      - Deploy to Staging:
+          requires:
+            - Unit Tests
+  deploy to production:
+    jobs:
+      - Unit Tests:
+          filters:
+            branches:
+              only: master
+      - slack/approval-notification:
+          message: Pending approval for deploying master
+          requires:
+            - Unit Tests
+      - Pending Approval:
+          type: approval
+          requires:
+            - slack/approval-notification
+      - Deploy to Production:
+          requires:
+            - Pending Approval

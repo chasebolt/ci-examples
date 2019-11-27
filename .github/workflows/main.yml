@@ -1,0 +1,108 @@
+name: Main
+on: push
+jobs:
+  phpunit:
+    name: PHP ${{ matrix.php-version }} Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php-version: [7.3]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@master
+        with:
+          fetch-depth: 1
+      - name: Install PHP
+        uses: shivammathur/setup-php@master
+        with:
+          php-version: ${{ matrix.php-version }}
+          extension-csv: mbstring
+      - name: Get Composer Cache Directory
+        id: composer-cache
+        run: echo "::set-output name=dir::$(composer config cache-files-dir)"
+      - name: Cache dependencies
+        uses: actions/cache@v1
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: v1-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: v1-composer-
+      - name: Install Composer Packages
+        run: composer install --no-ansi --no-interaction --no-suggest
+      - name: Run PHPUnit Tests
+        run: ./vendor/bin/phpunit
+  sensiolabs:
+    name: Security Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@master
+        with:
+          fetch-depth: 1
+      - name: Checkout SensioLabs Security Checker
+        run: |
+          git clone https://github.com/sensiolabs/security-checker.git
+          cd security-checker
+      - name: Get Composer Cache Directory
+        id: composer-cache
+        run: echo "::set-output name=dir::$(composer config cache-files-dir)"
+      - name: Cache dependencies
+        uses: actions/cache@v1
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: v1-composer-${{ hashFiles('composer.json') }}
+          restore-keys: v1-composer-
+      - name: Install Composer Packages
+        run: composer install --no-ansi --no-interaction --no-suggest
+      - name: Run Security Checker
+        run: php security-checker security:check ../composer.lock
+    needs: phpunit
+  deploy_stage:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/master'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@master
+        with:
+          fetch-depth: 1
+      - name: Get Composer Cache Directory
+        id: composer-cache
+        run: echo "::set-output name=dir::$(composer config cache-files-dir)"
+      - name: Cache dependencies
+        uses: actions/cache@v1
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: v1-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: v1-composer-
+      - name: Install Composer Packages
+        run: composer install --no-ansi --no-interaction --no-suggest
+      - name: Deploy to Staging
+        env:
+          VAPOR_API_TOKEN: ${{ secrets.VAPOR_API_TOKEN }}
+        run: ./vendor/bin/vapor deploy staging --commit="${GITHUB_SHA}" --message="$(git log --format=%B -n 1 ${GITHUB_SHA})"
+    needs: sensiolabs
+  deploy_prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@master
+        with:
+          fetch-depth: 1
+      - name: Get Composer Cache Directory
+        id: composer-cache
+        run: echo "::set-output name=dir::$(composer config cache-files-dir)"
+      - name: Cache dependencies
+        uses: actions/cache@v1
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: v1-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: v1-composer-
+      - name: Install Composer Packages
+        run: composer install --no-ansi --no-interaction --no-suggest
+      - name: Deploy to Production
+        env:
+          VAPOR_API_TOKEN: ${{ secrets.VAPOR_API_TOKEN }}
+        run: ./vendor/bin/vapor deploy staging --commit="${GITHUB_SHA}" --message="$(git log --format=%B -n 1 ${GITHUB_SHA})"
+    needs: sensiolabs

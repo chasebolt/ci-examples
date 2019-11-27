@@ -1,0 +1,84 @@
+version: v1.0
+name: Test & Deploy Stage
+agent:
+  machine:
+    type: e1-standard-2
+    os_image: ubuntu1804
+  containers:
+    - name: main
+      image: semaphoreci/php:7.3-node
+blocks:
+  - name: Install Dependencies
+    task:
+      jobs:
+        - name: composer
+          commands:
+            - checkout
+            - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+            - cache restore
+            - composer install
+            - cache store
+            - cp .env.example .env
+            - php artisan key:generate
+    dependencies: []
+  - name: Run Unit Tests
+    task:
+      jobs:
+        - name: phpunit
+          commands:
+            - checkout
+            - cache restore
+            - ./vendor/bin/phpunit
+    dependencies:
+      - Install Dependencies
+  - name: Run Security Tests
+    task:
+      jobs:
+        - name: sensiolabs
+          commands:
+            - checkout
+            - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+            - git clone https://github.com/sensiolabs/security-checker.git
+            - cd security-checker
+            - composer install
+            - php security-checker security:check ../composer.lock
+    dependencies:
+      - Run Unit Tests
+  - name: Deploy to Staging
+    task:
+      secrets:
+        - name: VAPOR_API_TOKEN
+      jobs:
+        - name: deploy
+          commands:
+            - checkout
+            - |
+              apt-get update
+              apt-get install -y libzip-dev
+              docker-php-ext-install zip
+            - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+            - cache restore
+            - ./vendor/bin/vapor deploy staging --commit="${SEMAPHORE_GIT_SHA}" --message="$(git log --format=%B -n 1 ${SEMAPHORE_GIT_SHA})"
+    skip:
+      when: branch = 'master'
+    dependencies:
+      - Run Security Tests
+  - name: Deploy to Production
+    task:
+      secrets:
+        - name: VAPOR_API_TOKEN
+      jobs:
+        - name: deploy
+          commands:
+            - checkout
+            - |
+              apt-get update
+              apt-get install -y libzip-dev
+              docker-php-ext-install zip
+            - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+            - cache restore
+            - ./vendor/bin/vapor deploy production --commit="${SEMAPHORE_GIT_SHA}" --message="$(git log --format=%B -n 1 ${SEMAPHORE_GIT_SHA})"
+    skip:
+      when: branch != 'master'
+    dependencies:
+      - Run Security Tests
